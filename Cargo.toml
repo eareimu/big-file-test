@@ -1,0 +1,21 @@
+[package]
+name = "big-file-test"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "server"
+path = "src/server.rs"
+
+[[bin]]
+name = "client"
+path = "src/client.rs"
+
+[dependencies]
+clap = { version = "4.5.31", features = ["derive"] }
+gm-quic = { git = "https://github.com/genmeta/gm-quic.git", branch = "refactor/remove_tracing" }
+qlog = { git = "https://github.com/genmeta/gm-quic.git", branch = "refactor/remove_tracing" }
+rustls = { version = "0.23.0", default-features = false, features = ["ring"] }
+tokio = { version = "1.43.0", features = ["full"] }
+tracing = "0.1.41"
+tracing-subscriber = "0.3.19"
