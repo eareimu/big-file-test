@@ -11,10 +11,20 @@ path = "src/server.rs"
 name = "client"
 path = "src/client.rs"
 
+[[bin]]
+name = "tcp-server"
+path = "src/tcp-server.rs"
+
+[[bin]]
+name = "tcp-client"
+path = "src/tcp-client.rs"
+
 [dependencies]
 clap = { version = "4.5.31", features = ["derive"] }
-gm-quic = { git = "https://github.com/genmeta/gm-quic.git", branch = "refactor/remove_tracing" }
-qlog = { git = "https://github.com/genmeta/gm-quic.git", branch = "refactor/remove_tracing" }
+futures = "0.3"
+gm-quic = { git = "https://github.com/genmeta/gm-quic.git", branch = "feat/qlog_emit_congestion" }
+qlog = { git = "https://github.com/genmeta/gm-quic.git", branch = "feat/qlog_emit_congestion" }
+rand = "0.9.0"
 rustls = { version = "0.23.0", default-features = false, features = ["ring"] }
 tokio = { version = "1.43.0", features = ["full"] }
 tracing = "0.1.41"

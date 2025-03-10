@@ -1,15 +1,15 @@
-use std::{io, net::SocketAddr, path::PathBuf, sync::Arc};
+use std::{io, net::ToSocketAddrs, path::PathBuf, sync::Arc, time::Instant};
 
 use clap::Parser;
 use gm_quic::ToCertificate;
-use qlog::telemetry::handy::DefaultSeqLogger;
+use qlog::telemetry::handy::{DefaultSeqLogger, NullLogger};
 use rustls::RootCertStore;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[derive(Parser)]
 struct Opt {
     #[arg(long, default_value = "0.0.0.0:0")]
-    server: SocketAddr,
+    server: String,
     #[arg(long, default_value = ".")]
     qlog_dir: PathBuf,
     #[arg(long)]
@@ -25,6 +25,7 @@ async fn main() -> io::Result<()> {
     let option = Opt::parse();
 
     let qlogger = Arc::new(DefaultSeqLogger::new(option.qlog_dir));
+    // let qlogger = Arc::new(NullLogger);
 
     let mut roots = RootCertStore::empty();
     roots.add_parsable_certificates(include_bytes!("../ca.crt").to_certificate());
@@ -38,25 +39,59 @@ async fn main() -> io::Result<()> {
             .build(),
     );
 
-    let connection = client.connect("test0.genmeta.net", option.server)?;
-    tracing::info!("connecting to {}", option.server);
+    let server = option.server.to_socket_addrs()?.next().unwrap();
+    let connection = client.connect("test0.genmeta.net", server)?;
+    tracing::info!("connecting to {}", server);
 
     let (_stream_id, (mut reader, mut writer)) = connection.open_bi_stream().await?.unwrap();
     tracing::info!("opened stream");
+    let file = Arc::new(tokio::fs::read(&option.file).await?);
+    // let file = Arc::new(
+    //     std::iter::repeat_n(
+    //         [0x0, 0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0x7, 0x8, 0x9].into_iter(),
+    //         1024 * 1024,
+    //     )
+    //     .flatten()
+    //     .collect::<Vec<u8>>(),
+    // );
 
-    let file = tokio::fs::read(&option.file).await?;
+    let task = tokio::spawn({
+        let start_read = Instant::now();
+        let file = file.clone();
+        async move {
+            let mut back = vec![];
+            while let Ok(n) = reader.read_buf(&mut back).await {
+                tracing::info!(
+                    "read {n} bytes ({}/{})({:.2}%)",
+                    back.len(),
+                    file.len(),
+                    back.len() as f64 / file.len() as f64 * 100.0
+                );
+                if n == 0 {
+                    break;
+                }
+            }
+
+            assert_eq!(back, *file);
+            start_read
+        }
+    });
+
+    let start_write = Instant::now();
     writer.write_all(&file).await?;
     writer.shutdown().await?;
+    let upload_sec = start_write.elapsed().as_secs_f64();
 
-    let mut back = Vec::new();
-    while let Ok(n) = reader.read_buf(&mut back).await {
-        tracing::info!("read {n} bytes");
-        if n == 0 {
-            break;
-        }
-    }
+    let start_read = task.await?;
+    let download_sec = start_read.elapsed().as_secs_f64();
 
-    assert_eq!(file, back);
+    tracing::info!(
+        "done! ↑ {:.4}s({:.4}MB/S), ↓ {:.4}s({:.4}MB/S)",
+        upload_sec,
+        file.len() as f64 / upload_sec / 1024u32.pow(2) as f64,
+        download_sec,
+        file.len() as f64 / download_sec / 1024u32.pow(2) as f64
+    );
 
     connection.close("no error".into(), 0);
 

@@ -1,13 +1,11 @@
 #![feature(never_type)]
 
-pub mod client;
-
 use std::{io, net::SocketAddr, path::PathBuf, sync::Arc};
 
 use clap::Parser;
 use gm_quic::{Connection, StreamReader, StreamWriter};
-use qlog::telemetry::handy::DefaultSeqLogger;
-use tokio::io::AsyncWriteExt;
+use qlog::telemetry::handy::{DefaultSeqLogger, NullLogger};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tracing::Instrument;
 
 #[derive(Parser)]
@@ -27,6 +25,7 @@ async fn main() -> io::Result<()> {
     let option = Opt::parse();
 
     let qlogger = Arc::new(DefaultSeqLogger::new(option.qlog_dir.clone()));
+    // let qlogger = Arc::new(NullLogger);
 
     let server = gm_quic::QuicServer::builder()
         .without_cert_verifier()
@@ -45,8 +44,24 @@ async fn main() -> io::Result<()> {
     );
 
     async fn for_each_stream(mut reader: StreamReader, mut writer: StreamWriter) -> io::Result<()> {
-        tokio::io::copy(&mut reader, &mut writer).await?;
-        tracing::info!("transfer completed, waiting for ack");
+        let mut buffer = [0; 4096];
+
+        let mut echoed = 0;
+        loop {
+            match reader.read(&mut buffer).await? {
+                0 => break,
+                n => {
+                    echoed += n;
+                    writer.write_all(&buffer[..n]).await?
+                }
+            }
+        }
+
+        // let mut buf = vec![];
+        // reader.read_to_end(&mut buf).await?;
+        // writer.write_all(&buf).await?;
+
+        tracing::info!(echoed, "transfer completed, waiting for ack");
         writer.shutdown().await?;
         tracing::info!("done");
         Ok(())
