@@ -4,7 +4,10 @@ use std::{io, net::SocketAddr, path::PathBuf, sync::Arc};
 
 use clap::Parser;
 use gm_quic::{Connection, StreamReader, StreamWriter};
-use qlog::telemetry::handy::{DefaultSeqLogger, NullLogger};
+use qlog::telemetry::{
+    Log,
+    handy::{DefaultSeqLogger, NullLogger},
+};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tracing::Instrument;
 
@@ -13,7 +16,7 @@ struct Opt {
     #[arg(long, default_value = "0.0.0.0:0")]
     bind: SocketAddr,
     #[arg(long, default_value = ".")]
-    qlog_dir: PathBuf,
+    qlog_dir: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -24,8 +27,13 @@ async fn main() -> io::Result<()> {
 
     let option = Opt::parse();
 
-    let qlogger = Arc::new(DefaultSeqLogger::new(option.qlog_dir.clone()));
-    // let qlogger = Arc::new(NullLogger);
+    let qlogger = option
+        .qlog_dir
+        .as_ref()
+        .map_or_else::<Arc<dyn Log + Send + Sync>, _, _>(
+            || Arc::new(NullLogger),
+            |dir| Arc::new(DefaultSeqLogger::new(dir.clone())),
+        );
 
     let server = gm_quic::QuicServer::builder()
         .without_cert_verifier()
@@ -37,11 +45,7 @@ async fn main() -> io::Result<()> {
         .with_qlog(qlogger)
         .listen(option.bind)?;
 
-    tracing::info!(
-        "listening on {:?}, qlog_dir: {}",
-        server.addresses(),
-        option.qlog_dir.display()
-    );
+    tracing::info!("listening on {:?}", server.addresses());
 
     async fn for_each_stream(mut reader: StreamReader, mut writer: StreamWriter) -> io::Result<()> {
         let mut buffer = [0; 4096];

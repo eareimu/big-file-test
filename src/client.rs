@@ -2,16 +2,19 @@ use std::{io, net::ToSocketAddrs, path::PathBuf, sync::Arc, time::Instant};
 
 use clap::Parser;
 use gm_quic::ToCertificate;
-use qlog::telemetry::handy::{DefaultSeqLogger, NullLogger};
+use qlog::telemetry::{
+    Log,
+    handy::{DefaultSeqLogger, NullLogger},
+};
 use rustls::RootCertStore;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[derive(Parser)]
 struct Opt {
-    #[arg(long, default_value = "0.0.0.0:0")]
+    #[arg(long)]
     server: String,
-    #[arg(long, default_value = ".")]
-    qlog_dir: PathBuf,
+    #[arg(long, default_value = "")]
+    qlog_dir: Option<PathBuf>,
     #[arg(long)]
     file: PathBuf,
 }
@@ -24,8 +27,13 @@ async fn main() -> io::Result<()> {
 
     let option = Opt::parse();
 
-    let qlogger = Arc::new(DefaultSeqLogger::new(option.qlog_dir));
-    // let qlogger = Arc::new(NullLogger);
+    let qlogger = option
+        .qlog_dir
+        .as_ref()
+        .map_or_else::<Arc<dyn Log + Send + Sync>, _, _>(
+            || Arc::new(NullLogger),
+            |dir| Arc::new(DefaultSeqLogger::new(dir.clone())),
+        );
 
     let mut roots = RootCertStore::empty();
     roots.add_parsable_certificates(include_bytes!("../ca.crt").to_certificate());
