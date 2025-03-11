@@ -13,7 +13,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 struct Opt {
     #[arg(long)]
     server: String,
-    #[arg(long, default_value = "")]
+    #[arg(long, default_value = "None")]
     qlog_dir: Option<PathBuf>,
     #[arg(long)]
     file: PathBuf,

@@ -4,12 +4,12 @@
 ./gen-file.sh 32
 ```
 
-启动server。不指定qlog参数即禁用qlog
+启动server。不指定qlog参数即禁用qlog。所有参数都是可选的，server会打印它listen了哪个地址
 ``` shell
 cargo run --release --bin=server -- --qlog-dir=qlog --bind=[::]:35467 
 ```
 
-启动client。不指定qlog参数即禁用qlog
+启动client。不指定qlog参数即禁用qlog。file和server参数必选
 ``` shell
 cargo run --release --bin=client -- --qlog-dir=qlog --server=[::1]:35467 --file=rand-file-32M
 ```
