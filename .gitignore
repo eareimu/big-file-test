@@ -2,3 +2,5 @@
 /Cargo.lock
 /qlog
 /rand-file-*
+/venv
+/*.output
