@@ -22,7 +22,8 @@ struct Opt {
 #[tokio::main]
 async fn main() -> io::Result<()> {
     tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::INFO)
+        .with_max_level(tracing::Level::DEBUG)
+        .with_ansi(false)
         .init();
 
     let option = Opt::parse();

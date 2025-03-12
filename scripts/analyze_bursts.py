@@ -4,53 +4,58 @@ import sys
 
 
 class Burst:
-    def __init__(self, start_time, quota, last_end=None):
+    start_time: datetime
+    acuired_quota: int
+    result: str
+    last_end: datetime
+    finish_time: datetime
+
+    # success only
+    load_end_time: datetime = None
+    bytes_transferred: int = 0
+
+    # failed only
+    wait_for: str = None
+
+    def __init__(self, start_time, quota, last_end):
         self.start_time = start_time
-        self.loaded_time = None
-        self.sent_time = None
-        self.quota = quota
-        self.bytes_transferred = 0
-        self.status = "Unknown"
-        self.wait_reason = None
-        if last_end:
-            self.void = start_time - last_end
-        else:
-            self.void = None
+        self.acuired_quota = quota
+        self.last_end = last_end
 
     def total_duration(self):
-        if self.sent_time:
-            return (self.sent_time - self.start_time).total_seconds() * 1000
+        if self.finish_time:
+            return (self.finish_time - self.start_time).total_seconds() * 1000
         return None
 
     def socket_time(self):
-        if self.loaded_time and self.sent_time:
-            return (self.sent_time - self.loaded_time).total_seconds() * 1000
+        if self.load_end_time and self.finish_time:
+            return (self.finish_time - self.load_end_time).total_seconds() * 1000
         return None
 
     def load_time(self):
-        if self.loaded_time:
-            return (self.loaded_time - self.start_time).total_seconds() * 1000
+        if self.load_end_time:
+            return (self.load_end_time - self.start_time).total_seconds() * 1000
         return None
 
     def void_time(self):
-        if self.void:
-            return self.void.total_seconds() * 1000
+        if self.last_end:
+            return (self.start_time - self.last_end).total_seconds() * 1000
         return None
 
     def __str__(self):
         output = [
-            f"初始配额: {self.quota}"
-            f"状态: {self.status}",
+            f"初始配额: {self.acuired_quota}",
+            f"结果: {self.result}",
             f"持续时间: {self.total_duration()} ms",
             f"空隙时间: {self.void_time()} ms",
         ]
 
-        if self.status == "Success":
-            output.append(f"传输数据量: {self.bytes_transferred} bytes"
-                          f"加载时间: {self.load_time()} ms"
+        if self.result == "Success":
+            output.append(f"传输数据量: {self.bytes_transferred} bytes\n"
+                          f"加载时间: {self.load_time()} ms\n"
                           f"Socket时间: {self.socket_time()} ms",)
-        elif self.status == "Failed":
-            output.append(f"等待原因: {self.wait_reason}")
+        elif self.result == "Failed":
+            output.append(f"等待原因: {self.wait_for}")
 
         return "\n".join(output)
 
@@ -93,22 +98,22 @@ class BurstAnalyzer:
 
             # 检测加载完成
             if 'burst: loaded segments' in line:
-                self.current_burst.loaded_time = timestamp
+                self.current_burst.load_end_time = timestamp
 
             # 检测burst成功结束
             if 'burst: sent all' in line:
-                self.current_burst.status = "Success"
-                self.current_burst.sent_time = timestamp
+                self.current_burst.result = "Success"
+                self.current_burst.finish_time = timestamp
                 self.bursts.append(self.current_burst)
                 self.current_burst = None
                 self.last_end = timestamp
 
             # 检测burst失败
             elif 'wait for' in line:
-                self.current_burst.status = "Failed"
-                self.current_burst.wait_reason = line.split(
+                self.current_burst.result = "Failed"
+                self.current_burst.finish_time = timestamp
+                self.current_burst.wait_for = line.split(
                     'wait for')[-1].strip()
-                self.current_burst.sent_time = timestamp
                 self.bursts.append(self.current_burst)
                 self.current_burst = None
                 self.last_end = timestamp
@@ -117,8 +122,8 @@ class BurstAnalyzer:
         print("\nBurst 分析报告:")
         print("-" * 50)
 
-        successful_bursts = [b for b in self.bursts if b.status == "Success"]
-        failed_bursts = [b for b in self.bursts if b.status == "Failed"]
+        successful_bursts = [b for b in self.bursts if b.result == "Success"]
+        failed_bursts = [b for b in self.bursts if b.result == "Failed"]
 
         for i, burst in enumerate(self.bursts, 1):
             print(f"\nBurst #{i}:")
