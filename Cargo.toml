@@ -19,18 +19,31 @@ path = "src/tcp-server.rs"
 name = "tcp-client"
 path = "src/tcp-client.rs"
 
+[[bin]]
+name = "h3-server"
+path = "src/h3-server.rs"
+
+[[bin]]
+name = "h3-client"
+path = "src/h3-client.rs"
+
 [dependencies]
 clap = { version = "4.5.31", features = ["derive"] }
 futures = "0.3"
+h3 = "0.0.6"
+http = "1"
 # gm-quic = { git = "https://github.com/genmeta/gm-quic.git", branch = "feat/qlog_emit_congestion" }
 # qlog = { git = "https://github.com/genmeta/gm-quic.git", branch = "feat/qlog_emit_congestion" }
+# qudp = { path = "../gm-quic/qudp", features = ["gso"] }
+h3-shim = { path = "../gm-quic/h3-shim" }
 gm-quic = { path = "../gm-quic/gm-quic" }
 qlog = { path = "../gm-quic/qlog" }
 rand = "0.9.0"
 rustls = { version = "0.23.0", default-features = false, features = ["ring"] }
 tokio = { version = "1.43.0", features = ["full"] }
 tracing = "0.1.41"
-tracing-subscriber = "0.3.19"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter", "time"] }
+bytes = "1.10.1"
 
 [profile.release]
 debug = true
