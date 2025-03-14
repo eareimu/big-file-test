@@ -32,5 +32,5 @@ tokio = { version = "1.43.0", features = ["full"] }
 tracing = "0.1.41"
 tracing-subscriber = "0.3.19"
 
-# [profile.release]
-# debug = true
+[profile.release]
+debug = true

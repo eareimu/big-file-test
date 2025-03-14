@@ -1,4 +1,13 @@
-use std::{io, net::ToSocketAddrs, path::PathBuf, sync::Arc, time::Instant};
+use std::{
+    io,
+    net::ToSocketAddrs,
+    path::PathBuf,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering::Relaxed},
+    },
+    time::Instant,
+};
 
 use clap::Parser;
 use gm_quic::ToCertificate;
@@ -7,27 +16,45 @@ use qlog::telemetry::{
     handy::{DefaultSeqLogger, NullLogger},
 };
 use rustls::RootCertStore;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    task::JoinSet,
+};
 
 #[derive(Parser)]
 struct Opt {
-    #[arg(long)]
+    #[arg(long, default_value = "[::1]:35467")]
     server: String,
-    #[arg(long, default_value = "None")]
-    qlog_dir: Option<PathBuf>,
     #[arg(long)]
+    qlog_dir: Option<PathBuf>,
+    #[arg(long, default_value = "4")]
+    streams: usize,
+    #[arg(long, default_value = "rand-file-128M")]
     file: PathBuf,
 }
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
+    let option = Opt::parse();
+    let file_size = option.file.metadata()?.len() / (1024 * 1024);
+    let output = format!("client-{}*{}M.output", option.streams, file_size);
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::DEBUG)
         .with_ansi(false)
+        .with_writer(
+            std::fs::OpenOptions::new()
+                .create(true)
+                .truncate(true)
+                .write(true)
+                .open(output)?,
+        )
         .init();
+    run(option)
+        .await
+        .inspect_err(|error| tracing::error!(?error))
+}
 
-    let option = Opt::parse();
-
+async fn run(option: Opt) -> io::Result<()> {
     let qlogger = option
         .qlog_dir
         .as_ref()
@@ -52,54 +79,67 @@ async fn main() -> io::Result<()> {
     let connection = client.connect("test0.genmeta.net", server)?;
     tracing::info!("connecting to {}", server);
 
-    let (_stream_id, (mut reader, mut writer)) = connection.open_bi_stream().await?.unwrap();
-    tracing::info!("opened stream");
     let file = Arc::new(tokio::fs::read(&option.file).await?);
-    // let file = Arc::new(
-    //     std::iter::repeat_n(
-    //         [0x0, 0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0x7, 0x8, 0x9].into_iter(),
-    //         1024 * 1024,
-    //     )
-    //     .flatten()
-    //     .collect::<Vec<u8>>(),
-    // );
+    let rcvd = Arc::new(AtomicUsize::new(0));
 
-    let task = tokio::spawn({
-        let start_read = Instant::now();
+    let mut streams = JoinSet::new();
+
+    for stream_idx in 0..option.streams {
+        let (_stream_id, (mut reader, mut writer)) = connection.open_bi_stream().await?.unwrap();
+        tracing::info!(stream_idx, "opened stream");
+
         let file = file.clone();
-        async move {
-            let mut back = vec![];
-            while let Ok(n) = reader.read_buf(&mut back).await {
-                tracing::info!(
-                    "read {n} bytes ({}/{})({:.2}%)",
-                    back.len(),
-                    file.len(),
-                    back.len() as f64 / file.len() as f64 * 100.0
-                );
-                if n == 0 {
-                    break;
+        let read = rcvd.clone();
+        streams.spawn(async move {
+            let recv = tokio::spawn({
+                let file = file.clone();
+                let start_read = Instant::now();
+                async move {
+                    let mut back = vec![];
+                    loop {
+                        let n = reader.read_buf(&mut back).await?;
+                        read.fetch_add(n, Relaxed);
+                        if n == 0 {
+                            break;
+                        }
+                    }
+
+                    assert_eq!(back, *file);
+                    io::Result::Ok(start_read)
                 }
-            }
+            });
 
-            assert_eq!(back, *file);
-            start_read
-        }
-    });
+            let start_write = Instant::now();
+            writer.write_all(&file).await?;
+            writer.shutdown().await?;
+            let upload_sec = start_write.elapsed().as_secs_f64();
 
-    let start_write = Instant::now();
-    writer.write_all(&file).await?;
-    writer.shutdown().await?;
-    let upload_sec = start_write.elapsed().as_secs_f64();
+            let start_read = recv.await??;
+            let download_sec = start_read.elapsed().as_secs_f64();
 
-    let start_read = task.await?;
-    let download_sec = start_read.elapsed().as_secs_f64();
+            io::Result::Ok((upload_sec, download_sec))
+        });
+    }
+
+    let (mut upload_sec, mut download_sec) = streams
+        .join_all()
+        .await
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .reduce(|(u1, d1), (u2, d2)| (u1 + u2, d1 + d2))
+        .unwrap();
+
+    let total_data = option.streams * file.len();
+    upload_sec /= option.streams as f64;
+    download_sec /= option.streams as f64;
 
     tracing::info!(
         "done! ↑ {:.4}s({:.4}MB/S), ↓ {:.4}s({:.4}MB/S)",
         upload_sec,
-        file.len() as f64 / upload_sec / 1024u32.pow(2) as f64,
+        total_data as f64 / upload_sec / 1024u32.pow(2) as f64,
         download_sec,
-        file.len() as f64 / download_sec / 1024u32.pow(2) as f64
+        total_data as f64 / download_sec / 1024u32.pow(2) as f64
     );
 
     connection.close("no error".into(), 0);

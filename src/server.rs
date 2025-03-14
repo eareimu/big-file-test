@@ -13,9 +13,9 @@ use tracing::Instrument;
 
 #[derive(Parser)]
 struct Opt {
-    #[arg(long, default_value = "0.0.0.0:0")]
+    #[arg(long, default_value = "[::1]:35467")]
     bind: SocketAddr,
-    #[arg(long, default_value = "None")]
+    #[arg(long)]
     qlog_dir: Option<PathBuf>,
 }
 
