@@ -1,6 +1,7 @@
-use std::{io, path::PathBuf, sync::Arc, time::Instant};
+use std::{io, path::PathBuf, sync::Arc};
 
 use clap::Parser;
+use indicatif::{MultiProgress, ProgressBar};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[derive(Parser)]
@@ -23,43 +24,47 @@ async fn main() -> io::Result<()> {
         .await?
         .into_split();
 
-    let task = tokio::spawn({
-        let start_read = Instant::now();
+    let pbs = MultiProgress::new();
+
+    let download = tokio::spawn({
         let file = file.clone();
+        let download_pb = ProgressBar::new(file.len() as u64);
+        pbs.add(download_pb.clone());
         async move {
             let mut back = vec![];
             while let Ok(n) = reader.read_buf(&mut back).await {
-                tracing::info!(
-                    "read {n} bytes ({}/{})({:.2}%)",
-                    back.len(),
-                    file.len(),
-                    back.len() as f64 / file.len() as f64 * 100.0
-                );
+                download_pb.inc(n as u64);
                 if n == 0 {
                     break;
                 }
             }
+            download_pb.finish_with_message("done!");
 
             assert_eq!(back, *file);
-            start_read
         }
     });
 
-    let start_write = Instant::now();
-    writer.write_all(&file).await?;
+    let upload_pb = ProgressBar::new(file.len() as u64);
+    pbs.add(upload_pb.clone());
+
+    let mut file = file.as_slice();
+    while !file.is_empty() {
+        let write = writer.write(file).await?;
+        upload_pb.inc(write as u64);
+        file = &file[write..];
+    }
+    upload_pb.set_message("shutdown...");
     writer.shutdown().await?;
-    let upload_sec = start_write.elapsed().as_secs_f64();
+    upload_pb.finish_with_message("done");
+    download.await?;
 
-    let start_read = task.await?;
-    let download_sec = start_read.elapsed().as_secs_f64();
-
-    tracing::info!(
-        "done! ↑ {:.4}s({:.4}MB/S), ↓ {:.4}s({:.4}MB/S)",
-        upload_sec,
-        file.len() as f64 / upload_sec / 1024u32.pow(2) as f64,
-        download_sec,
-        file.len() as f64 / download_sec / 1024u32.pow(2) as f64
-    );
+    // tracing::info!(
+    //     "done! ↑ {:.4}s({:.4}MB/S), ↓ {:.4}s({:.4}MB/S)",
+    //     upload_sec,
+    //     file.len() as f64 / upload_sec / 1024u32.pow(2) as f64,
+    //     download_sec,
+    //     file.len() as f64 / download_sec / 1024u32.pow(2) as f64
+    // );
 
     Ok(())
 }

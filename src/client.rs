@@ -1,16 +1,8 @@
-use std::{
-    io,
-    net::ToSocketAddrs,
-    path::PathBuf,
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering::Relaxed},
-    },
-    time::Instant,
-};
+use std::{io, net::ToSocketAddrs, path::PathBuf, sync::Arc, time::Duration};
 
 use clap::Parser;
 use gm_quic::ToCertificate;
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use qlog::telemetry::{
     Log,
     handy::{DefaultSeqLogger, NullLogger},
@@ -76,71 +68,116 @@ async fn run(option: Opt) -> io::Result<()> {
     );
 
     let server = option.server.to_socket_addrs()?.next().unwrap();
-    let connection = client.connect("test0.genmeta.net", server)?;
+    let connection = client.connect("localhost", server)?;
     tracing::info!("connecting to {}", server);
 
     let file = Arc::new(tokio::fs::read(&option.file).await?);
-    let rcvd = Arc::new(AtomicUsize::new(0));
+    let pbs = MultiProgress::new();
+
+    let pb_stype = ProgressStyle::default_bar()
+        .template("{prefix} {wide_bar} {percent_precise}% {decimal_bytes_per_sec} ETA: {eta} {msg}")
+        .unwrap();
 
     let mut streams = JoinSet::new();
 
-    for stream_idx in 0..option.streams {
+    let upload_pbs = (0..option.streams)
+        .map(|idx| {
+            pbs.add(
+                ProgressBar::new(file.len() as u64)
+                    .with_style(pb_stype.clone())
+                    .with_prefix(format!("流{idx}↑")),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    let totoal_upload_pb = pbs.add(
+        ProgressBar::new((file.len() * option.streams) as u64)
+            .with_style(pb_stype.clone())
+            .with_prefix("总↑"),
+    );
+
+    let download_pbs = (0..option.streams)
+        .map(|idx| {
+            pbs.add(
+                ProgressBar::new(file.len() as u64)
+                    .with_style(pb_stype.clone())
+                    .with_prefix(format!("流{idx}↓")),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    let totoal_download_pb = pbs.add(
+        ProgressBar::new((file.len() * option.streams) as u64)
+            .with_style(pb_stype.clone())
+            .with_prefix("总↓"),
+    );
+
+    for (stream_idx, (upload_pb, download_pb)) in
+        (0..option.streams).zip(upload_pbs.into_iter().zip(download_pbs))
+    {
         let (_stream_id, (mut reader, mut writer)) = connection.open_bi_stream().await?.unwrap();
         tracing::info!(stream_idx, "opened stream");
 
         let file = file.clone();
-        let read = rcvd.clone();
+
+        let totoal_upload_pb = totoal_upload_pb.clone();
+        let totoal_download_pb = totoal_download_pb.clone();
+
         streams.spawn(async move {
             let recv = tokio::spawn({
                 let file = file.clone();
-                let start_read = Instant::now();
                 async move {
                     let mut back = vec![];
                     loop {
                         let n = reader.read_buf(&mut back).await?;
-                        read.fetch_add(n, Relaxed);
+                        download_pb.inc(n as u64);
+                        totoal_download_pb.inc(n as u64);
                         if n == 0 {
                             break;
                         }
                     }
 
                     assert_eq!(back, *file);
-                    io::Result::Ok(start_read)
+                    download_pb.finish_with_message("done");
+                    io::Result::Ok(())
                 }
             });
 
-            let start_write = Instant::now();
-            writer.write_all(&file).await?;
-            writer.shutdown().await?;
-            let upload_sec = start_write.elapsed().as_secs_f64();
+            {
+                let mut file = file.as_slice();
+                while !file.is_empty() {
+                    let write = writer.write(file).await?;
+                    upload_pb.inc(write as u64);
+                    totoal_upload_pb.inc(write as u64);
+                    file = &file[write..];
+                }
+                upload_pb.set_message("shutdown...");
+                writer.shutdown().await?;
+                upload_pb.finish_with_message("done");
+            }
 
-            let start_read = recv.await??;
-            let download_sec = start_read.elapsed().as_secs_f64();
-
-            io::Result::Ok((upload_sec, download_sec))
+            recv.await.unwrap()
         });
     }
 
-    let (mut upload_sec, mut download_sec) = streams
-        .join_all()
-        .await
-        .into_iter()
-        .collect::<Result<Vec<_>, _>>()?
-        .into_iter()
-        .reduce(|(u1, d1), (u2, d2)| (u1 + u2, d1 + d2))
-        .unwrap();
+    let ticker = {
+        let pbs = pbs.clone();
+        async move {
+            let mut interval = tokio::time::interval(Duration::from_millis(33));
+            loop {
+                pbs.suspend(|| ());
+                interval.tick().await;
+            }
+        }
+    };
 
-    let total_data = option.streams * file.len();
-    upload_sec /= option.streams as f64;
-    download_sec /= option.streams as f64;
+    tokio::select! {
+        all = streams.join_all() => { _ = all.into_iter().collect::<Result<Vec<_>, _>>()? },
+        _ = ticker => unreachable!(),
+    }
 
-    tracing::info!(
-        "done! ↑ {:.4}s({:.4}MB/S), ↓ {:.4}s({:.4}MB/S)",
-        upload_sec,
-        total_data as f64 / upload_sec / 1024u32.pow(2) as f64,
-        download_sec,
-        total_data as f64 / download_sec / 1024u32.pow(2) as f64
-    );
+    totoal_upload_pb.finish_with_message("done");
+    totoal_download_pb.finish_with_message("done");
 
     connection.close("no error".into(), 0);
 
