@@ -30,7 +30,7 @@ path = "src/h3-client.rs"
 [dependencies]
 clap = { version = "4.5.31", features = ["derive"] }
 futures = "0.3"
-h3 = "0.0.6"
+h3 = "0.0.7"
 http = "1"
 # gm-quic = { git = "https://github.com/genmeta/gm-quic.git", branch = "feat/qlog_emit_congestion" }
 # qlog = { git = "https://github.com/genmeta/gm-quic.git", branch = "feat/qlog_emit_congestion" }

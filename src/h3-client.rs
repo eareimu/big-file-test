@@ -1,9 +1,10 @@
-use std::{sync::Arc, time::Instant};
+use std::{path::PathBuf, sync::Arc, time::Instant};
 
 use clap::Parser;
 use gm_quic::ToCertificate;
 use http::Uri;
-use indicatif::{ProgressBar, ProgressStyle};
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+use qlog::telemetry::handy::DefaultSeqLogger;
 use rustls::RootCertStore;
 use tokio::task::JoinSet;
 use tracing::{Instrument, info_span};
@@ -14,7 +15,7 @@ struct Opt {
     reqs: usize,
     #[arg(long, short = 'c', default_value = "64")]
     conns: usize,
-    #[arg(default_value = "https://localhost:4433/rand-file-15K")]
+    #[arg(default_value = "https://localhost:4431/rand-file-15K")]
     uri: String,
 }
 
@@ -58,62 +59,69 @@ async fn run(option: Opt) -> Result<(), Error> {
             .without_cert()
             .with_parameters(client_parameters())
             .with_alpns([b"h3".to_vec(), b"hq-29".to_vec()])
+            .with_qlog(Arc::new(DefaultSeqLogger::new(PathBuf::from("qlog"))))
             .build(),
     );
 
-    let start_time = Instant::now();
-    let pb = ProgressBar::new(0)
-        .with_style(ProgressStyle::with_template("{wide_bar} {pos}/{len} {eta}").unwrap());
+    let pbs = MultiProgress::new();
+    let conns_pb = pbs.add(ProgressBar::new(0).with_prefix("connections").with_style(
+        ProgressStyle::with_template("{prefix} {wide_bar} {pos}/{len}")?,
+    ));
+    let total_pb = pbs.add(ProgressBar::new(0).with_prefix("requests").with_style(
+        ProgressStyle::with_template("{prefix} {wide_bar} {pos}/{len} {per_sec} {eta}")?,
+    ));
 
+    let start_time = Instant::now();
     let mut connections = JoinSet::new();
-    for conn_id in 0..option.conns {
-        pb.inc_length(option.reqs as u64);
+    for idx in 0..option.conns {
+        conns_pb.inc_length(1);
+
         let connection = client.connect(auth.host(), addr)?;
         let uri = uri.clone();
 
         connections.spawn(
-            for_each_connection(connection, uri, option.reqs)
-                .instrument(info_span!("connection", conn_id)),
+            for_each_connection(connection, uri, option.reqs, total_pb.clone(), pbs.clone())
+                .instrument(info_span!("connection", idx)),
         );
     }
 
     let mut success_queries = 0;
-    let mut conn_counting = 0;
     while let Some(res) = connections.join_next().await {
-        conn_counting += 1;
         match res {
             Ok(Ok(queries)) => {
                 success_queries += queries;
-                pb.inc(queries as u64);
+                conns_pb.inc(1);
             }
             Ok(Err(err)) => {
-                pb.dec_length(option.reqs as u64);
                 tracing::error!(error = ?err,"conenction failed");
+                conns_pb.dec_length(1);
             }
             Err(err) if err.is_panic() => std::panic::resume_unwind(err.into_panic()),
             Err(err) => panic!("{err}"),
         }
-        if conn_counting == option.conns {
-            tracing::info!(target: "counting", "this should done");
-        }
     }
+
+    conns_pb.finish();
+    total_pb.finish();
 
     let total_time = start_time.elapsed().as_secs_f64();
     let qps = success_queries as f64 / total_time;
 
-    tracing::info!(target: "counting",success_queries,total_time,qps, "done!");
+    tracing::info!(target: "counting" ,success_queries ,total_time ,qps, "done!");
 
     Ok(())
 }
 
 fn client_parameters() -> gm_quic::ClientParameters {
     let mut params = gm_quic::ClientParameters::default();
-    params.set_initial_max_streams_bidi(100);
-    params.set_initial_max_streams_uni(100);
-    params.set_initial_max_data((1u32 << 20).into());
-    params.set_initial_max_stream_data_uni((1u32 << 20).into());
-    params.set_initial_max_stream_data_bidi_local((1u32 << 20).into());
-    params.set_initial_max_stream_data_bidi_remote((1u32 << 20).into());
+
+    params.set_initial_max_streams_bidi(100u32);
+    params.set_initial_max_streams_uni(100u32);
+    params.set_initial_max_data(1u32 << 20);
+    params.set_initial_max_stream_data_uni(1u32 << 20);
+    params.set_initial_max_stream_data_bidi_local(1u32 << 20);
+    params.set_initial_max_stream_data_bidi_remote(1u32 << 20);
+
     params
 }
 
@@ -121,10 +129,27 @@ async fn for_each_connection(
     connection: Arc<gm_quic::Connection>,
     uri: Uri,
     reqs: usize,
+    total_pb: ProgressBar,
+    pbs: MultiProgress,
 ) -> Result<usize, Error> {
+    // let origin_dcid = connection.origin_dcid()?;
+    let conn_pb = pbs.insert_after(
+        &total_pb,
+        ProgressBar::new(0)
+            // .with_prefix(format!("{origin_dcid:x}"))
+            .with_message("connecting")
+            .with_style(ProgressStyle::with_template("{prefix} {spinner} {msg}")?),
+    );
+
     let connection = h3_shim::QuicConnection::new(connection).await;
     let (mut conn, send_request) = h3::client::new(connection).await?;
     tracing::info!("conenction established");
+
+    total_pb.inc_length(reqs as u64);
+    conn_pb.set_style(ProgressStyle::with_template(
+        "{prefix} {wide_bar} {pos}/{len}",
+    )?);
+
     let driver = async move {
         core::future::poll_fn(|cx| conn.poll_close(cx))
             .await
@@ -135,16 +160,24 @@ async fn for_each_connection(
 
     let mut requests = JoinSet::new();
     for req_id in 0..reqs {
+        let conn_pb = conn_pb.clone();
         let request = http::Request::builder().uri(uri.clone()).body(())?;
         let mut send_request = send_request.clone();
 
         requests.spawn(
             async move {
                 let mut request_stream = send_request.send_request(request).await?;
-                request_stream.finish().await?;
-                let _resp = request_stream.recv_response().await?;
-                while request_stream.recv_data().await?.is_some() {}
-                Result::<(), Error>::Ok(())
+                let request = async {
+                    request_stream.finish().await?;
+                    conn_pb.inc_length(1);
+                    let _resp = request_stream.recv_response().await?;
+                    while request_stream.recv_data().await?.is_some() {}
+                    Result::<(), Error>::Ok(())
+                };
+                request
+                    .await
+                    .inspect(|()| conn_pb.inc(1))
+                    .inspect_err(|_| conn_pb.dec_length(1))
             }
             .instrument(info_span!("request", req_id)),
         );
@@ -152,20 +185,25 @@ async fn for_each_connection(
 
     let mut error = None;
 
-    Ok(requests
-        .join_all()
-        .await
-        .into_iter()
-        .filter_map(|result| match result {
-            Ok(()) => Some(()),
-            Err(err) => {
-                error = Some(err);
-                None
+    let mut success_queries = 0;
+    while let Some(res) = requests.join_next().await {
+        match res {
+            Ok(Ok(())) => {
+                success_queries += 1;
+                total_pb.inc(1);
             }
-        })
-        .count())
-    .and_then(|n| match n {
-        0 => Err(error.unwrap()),
-        n => Ok(n),
-    })
+            Ok(Err(err)) => {
+                total_pb.dec_length(1);
+                error = Some(err);
+            }
+            Err(err) if err.is_panic() => std::panic::resume_unwind(err.into_panic()),
+            Err(err) => panic!("{err}"),
+        }
+    }
+    conn_pb.finish_and_clear();
+    if success_queries != 0 {
+        Ok(success_queries)
+    } else {
+        Err(error.unwrap())
+    }
 }

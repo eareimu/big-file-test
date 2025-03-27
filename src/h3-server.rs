@@ -4,6 +4,7 @@ use bytes::{Bytes, BytesMut};
 use clap::Parser;
 use h3::{error::ErrorLevel, quic::BidiStream, server::RequestStream};
 use http::{Request, StatusCode};
+use qlog::telemetry::handy::DefaultSeqLogger;
 use tokio::{fs::File, io::AsyncReadExt};
 use tracing::{error, info};
 
@@ -23,7 +24,7 @@ pub struct Opt {
     #[structopt(
         short,
         long,
-        default_values = ["127.0.0.1:4433", "[::1]:4433"],
+        default_values = ["127.0.0.1:4431", "[::1]:4431"],
         help = "What address:port to listen for new connections"
     )]
     pub listen: Vec<SocketAddr>,
@@ -56,12 +57,13 @@ static ALPN: &[u8] = b"h3";
 #[cfg_attr(test, allow(unused))]
 #[tokio::main(flavor = "current_thread")]
 pub async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .with_writer(std::io::stderr)
-        .with_ansi(true)
-        .init();
-    // console_subscriber::init();
+    // tracing_subscriber::fmt()
+    //     .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+    //     .with_ansi(false)
+    //     .init();
+    // console_subscriber::Builder::default()
+    //     .server_addr("127.0.0.1:16669".parse::<SocketAddr>().unwrap())
+    //     .init();
     rustls::crypto::ring::default_provider()
         .install_default()
         .expect("Failed to install rustls crypto provider");
@@ -80,8 +82,9 @@ pub async fn run(opt: Opt) -> Result<(), Box<dyn std::error::Error + Send + Sync
     let Certs { cert, key } = opt.certs;
 
     let quic_server = ::gm_quic::QuicServer::builder()
-        .without_cert_verifier()
+        .without_client_cert_verifier()
         .with_parameters(server_parameters())
+        .with_qlog(Arc::new(DefaultSeqLogger::new(PathBuf::from("qlog"))))
         .enable_sni()
         .add_host("localhost", cert.as_path(), key.as_path())
         .with_alpns([ALPN.to_vec()])
@@ -111,12 +114,13 @@ pub async fn run(opt: Opt) -> Result<(), Box<dyn std::error::Error + Send + Sync
 fn server_parameters() -> gm_quic::ServerParameters {
     let mut params = gm_quic::ServerParameters::default();
 
-    params.set_initial_max_streams_bidi(100);
-    params.set_initial_max_streams_uni(100);
-    params.set_initial_max_data((1u32 << 20).into());
-    params.set_initial_max_stream_data_uni((1u32 << 20).into());
-    params.set_initial_max_stream_data_bidi_local((1u32 << 20).into());
-    params.set_initial_max_stream_data_bidi_remote((1u32 << 20).into());
+    params.set_initial_max_streams_bidi(100u32);
+    params.set_initial_max_streams_uni(100u32);
+    params.set_initial_max_data(1u32 << 20);
+    params.set_initial_max_stream_data_uni(1u32 << 20);
+    params.set_initial_max_stream_data_bidi_local(1u32 << 20);
+    params.set_initial_max_stream_data_bidi_remote(1u32 << 20);
+
     params
 }
 
