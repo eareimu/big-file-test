@@ -4,7 +4,6 @@ use bytes::{Bytes, BytesMut};
 use clap::Parser;
 use h3::{error::ErrorLevel, quic::BidiStream, server::RequestStream};
 use http::{Request, StatusCode};
-use qlog::telemetry::handy::DefaultSeqLogger;
 use tokio::{fs::File, io::AsyncReadExt};
 use tracing::{error, info};
 
@@ -56,6 +55,7 @@ static ALPN: &[u8] = b"h3";
 
 #[cfg_attr(test, allow(unused))]
 #[tokio::main(flavor = "current_thread")]
+// #[tokio::main]
 pub async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // tracing_subscriber::fmt()
     //     .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
@@ -84,7 +84,6 @@ pub async fn run(opt: Opt) -> Result<(), Box<dyn std::error::Error + Send + Sync
     let quic_server = ::gm_quic::QuicServer::builder()
         .without_client_cert_verifier()
         .with_parameters(server_parameters())
-        .with_qlog(Arc::new(DefaultSeqLogger::new(PathBuf::from("qlog"))))
         .enable_sni()
         .add_host("localhost", cert.as_path(), key.as_path())
         .with_alpns([ALPN.to_vec()])

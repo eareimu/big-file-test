@@ -1,10 +1,9 @@
-use std::{path::PathBuf, sync::Arc, time::Instant};
+use std::{sync::Arc, time::Instant};
 
 use clap::Parser;
 use gm_quic::ToCertificate;
 use http::Uri;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-use qlog::telemetry::handy::DefaultSeqLogger;
 use rustls::RootCertStore;
 use tokio::task::JoinSet;
 use tracing::{Instrument, info_span};
@@ -59,7 +58,6 @@ async fn run(option: Opt) -> Result<(), Error> {
             .without_cert()
             .with_parameters(client_parameters())
             .with_alpns([b"h3".to_vec(), b"hq-29".to_vec()])
-            .with_qlog(Arc::new(DefaultSeqLogger::new(PathBuf::from("qlog"))))
             .build(),
     );
 
