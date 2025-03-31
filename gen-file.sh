@@ -1,1 +1,0 @@
-dd if=/dev/random of=rand-file-$1M bs=1M count=$1

@@ -4,3 +4,7 @@
 /rand-file-*
 /venv
 /*.output
+/go-quic/quic_server
+
+/certs
+/rand_files

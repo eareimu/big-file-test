@@ -17,17 +17,19 @@ struct Options {
     reqs: usize,
     #[arg(long, short = 'c', default_value = "64")]
     conns: usize,
-    #[arg(default_value = "https://localhost:4431/rand-file-15K")]
-    uri: String,
+    #[arg(long, default_value = "ca.crt")]
+    roots: Vec<String>,
     #[arg(short = 'p', long)]
     progress: bool,
+    #[arg(default_value = "https://localhost:4431/rand-file-15K")]
+    uri: String,
 }
 
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        // .with_ansi(false)
+        .with_ansi(false)
         // .with_writer(
         //     std::fs::OpenOptions::new()
         //         .create(true)
@@ -52,10 +54,13 @@ async fn run(options: Options) -> Result<(), Error> {
         .await?
         .next()
         .ok_or("dns found no addresses")?;
-    tracing::info!("DNS lookup for {:?}: {:?}", uri, addr);
+    tracing::info!("DNS lookup for {:?}: {:?}", auth.host(), addr);
 
     let mut roots = RootCertStore::empty();
-    roots.add_parsable_certificates(include_bytes!("../ca.crt").to_certificate());
+    for root in options.roots {
+        let cert = tokio::fs::read(root).await?;
+        roots.add_parsable_certificates(cert.to_certificate());
+    }
 
     let client = Arc::new(
         gm_quic::QuicClient::builder()
@@ -63,6 +68,7 @@ async fn run(options: Options) -> Result<(), Error> {
             .without_cert()
             .with_parameters(client_parameters())
             .with_alpns([b"h3" as &[u8], b"hq-29"])
+            .enable_sslkeylog()
             .build(),
     );
 

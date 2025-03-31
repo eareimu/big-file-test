@@ -114,6 +114,7 @@ async fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
             .without_cert()
             .with_parameters(client_stream_unlimited_parameters())
             .with_qlog(qlogger)
+            .enable_sslkeylog()
             .build(),
     );
 
