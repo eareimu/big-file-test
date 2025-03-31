@@ -5,7 +5,7 @@ use indicatif::{MultiProgress, ProgressBar};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[derive(Parser)]
-struct Opt {
+struct Options {
     #[arg(long, default_value = "0.0.0.0:0")]
     server: String,
     #[arg(long)]
@@ -17,10 +17,10 @@ async fn main() -> io::Result<()> {
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
         .init();
-    let option = Opt::parse();
-    let file = Arc::new(tokio::fs::read(&option.file).await?);
+    let options = Options::parse();
+    let file = Arc::new(tokio::fs::read(&options.file).await?);
 
-    let (mut reader, mut writer) = tokio::net::TcpStream::connect(option.server)
+    let (mut reader, mut writer) = tokio::net::TcpStream::connect(options.server)
         .await?
         .into_split();
 

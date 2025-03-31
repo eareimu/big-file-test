@@ -4,7 +4,7 @@ use clap::Parser;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[derive(Parser)]
-struct Opt {
+struct Options {
     #[arg(long, default_value = "0.0.0.0:0")]
     bind: SocketAddr,
 }
@@ -15,9 +15,9 @@ async fn main() -> io::Result<()> {
         .with_max_level(tracing::Level::INFO)
         .init();
 
-    let option = Opt::parse();
+    let options = Options::parse();
 
-    let listener = tokio::net::TcpListener::bind(option.bind).await?;
+    let listener = tokio::net::TcpListener::bind(options.bind).await?;
 
     tracing::info!("listening on {:?}", listener.local_addr()?);
 

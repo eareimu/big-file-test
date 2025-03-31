@@ -9,7 +9,7 @@ use tracing::{error, info};
 
 #[derive(Parser, Debug)]
 #[structopt(name = "server")]
-pub struct Opt {
+pub struct Options {
     #[structopt(
         name = "dir",
         short,
@@ -68,18 +68,18 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .install_default()
         .expect("Failed to install rustls crypto provider");
     // process cli arguments
-    let opt = Opt::parse();
+    let options = Options::parse();
 
-    run(opt).await
+    run(options).await
 }
 
-pub async fn run(opt: Opt) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    info!("serving {}", opt.root.display());
-    let root = Arc::new(opt.root);
+pub async fn run(options: Options) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    info!("serving {}", options.root.display());
+    let root = Arc::new(options.root);
     if !root.is_dir() {
         return Err(format!("{}: is not a readable directory", root.display()).into());
     }
-    let Certs { cert, key } = opt.certs;
+    let Certs { cert, key } = options.certs;
 
     let quic_server = ::gm_quic::QuicServer::builder()
         .without_client_cert_verifier()
@@ -87,7 +87,7 @@ pub async fn run(opt: Opt) -> Result<(), Box<dyn std::error::Error + Send + Sync
         .enable_sni()
         .add_host("localhost", cert.as_path(), key.as_path())
         .with_alpns([ALPN.to_vec()])
-        .listen(&opt.listen[..])?;
+        .listen(&options.listen[..])?;
     info!("listening on {:?}", quic_server.addresses());
 
     // handle incoming connections and requests

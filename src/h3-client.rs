@@ -1,4 +1,7 @@
-use std::{sync::Arc, time::Instant};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use clap::Parser;
 use gm_quic::ToCertificate;
@@ -9,13 +12,15 @@ use tokio::task::JoinSet;
 use tracing::{Instrument, info_span};
 
 #[derive(Parser, Clone)]
-struct Opt {
+struct Options {
     #[arg(long, short = 'r', default_value = "64")]
     reqs: usize,
     #[arg(long, short = 'c', default_value = "64")]
     conns: usize,
     #[arg(default_value = "https://localhost:4431/rand-file-15K")]
     uri: String,
+    #[arg(short = 'p', long)]
+    progress: bool,
 }
 
 #[tokio::main]
@@ -32,7 +37,7 @@ async fn main() {
         //         .unwrap(),
         // )
         .init();
-    if let Err(error) = run(Opt::parse()).await {
+    if let Err(error) = run(Options::parse()).await {
         tracing::error!(?error);
         panic!("{error:?}");
     };
@@ -40,8 +45,8 @@ async fn main() {
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
 
-async fn run(option: Opt) -> Result<(), Error> {
-    let uri = option.uri.parse::<Uri>()?;
+async fn run(options: Options) -> Result<(), Error> {
+    let uri = options.uri.parse::<Uri>()?;
     let auth = uri.authority().unwrap();
     let addr = tokio::net::lookup_host((auth.host(), auth.port_u16().unwrap_or(443)))
         .await?
@@ -57,11 +62,14 @@ async fn run(option: Opt) -> Result<(), Error> {
             .with_root_certificates(roots)
             .without_cert()
             .with_parameters(client_parameters())
-            .with_alpns([b"h3".to_vec(), b"hq-29".to_vec()])
+            .with_alpns([b"h3" as &[u8], b"hq-29"])
             .build(),
     );
 
     let pbs = MultiProgress::new();
+    if !options.progress {
+        pbs.set_draw_target(indicatif::ProgressDrawTarget::hidden());
+    }
     let conns_pb = pbs.add(ProgressBar::new(0).with_prefix("connections").with_style(
         ProgressStyle::with_template("{prefix} {wide_bar} {pos}/{len}")?,
     ));
@@ -71,14 +79,14 @@ async fn run(option: Opt) -> Result<(), Error> {
 
     let start_time = Instant::now();
     let mut connections = JoinSet::new();
-    for idx in 0..option.conns {
+    for idx in 0..options.conns {
         conns_pb.inc_length(1);
 
         let connection = client.connect(auth.host(), addr)?;
         let uri = uri.clone();
 
         connections.spawn(
-            for_each_connection(connection, uri, option.reqs, total_pb.clone(), pbs.clone())
+            for_each_connection(connection, uri, options.reqs, total_pb.clone(), pbs.clone())
                 .instrument(info_span!("connection", idx)),
         );
     }
@@ -119,6 +127,7 @@ fn client_parameters() -> gm_quic::ClientParameters {
     params.set_initial_max_stream_data_uni(1u32 << 20);
     params.set_initial_max_stream_data_bidi_local(1u32 << 20);
     params.set_initial_max_stream_data_bidi_remote(1u32 << 20);
+    params.set_max_idle_timeout(Duration::from_secs(10));
 
     params
 }

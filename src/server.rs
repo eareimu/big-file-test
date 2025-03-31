@@ -1,5 +1,3 @@
-#![feature(never_type)]
-
 use std::{io, net::SocketAddr, path::PathBuf, sync::Arc};
 
 use clap::Parser;
@@ -12,7 +10,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tracing::Instrument;
 
 #[derive(Parser)]
-struct Opt {
+struct Options {
     #[arg(long, default_value = "[::1]:35467")]
     bind: SocketAddr,
     #[arg(long)]
@@ -25,9 +23,9 @@ async fn main() -> io::Result<()> {
         .with_max_level(tracing::Level::INFO)
         .init();
 
-    let option = Opt::parse();
+    let options = Options::parse();
 
-    let qlogger = option
+    let qlogger = options
         .qlog_dir
         .as_ref()
         .map_or_else::<Arc<dyn Log + Send + Sync>, _, _>(
@@ -43,7 +41,7 @@ async fn main() -> io::Result<()> {
         )
         .with_parameters(server_stream_unlimited_parameters())
         .with_qlog(qlogger)
-        .listen(option.bind)?;
+        .listen(options.bind)?;
 
     tracing::info!("listening on {:?}", server.addresses());
 
@@ -71,7 +69,7 @@ async fn main() -> io::Result<()> {
         Ok(())
     }
 
-    async fn for_each_conn(conn: Arc<Connection>) -> io::Result<!> {
+    async fn for_each_conn(conn: Arc<Connection>) -> io::Result<()> {
         loop {
             let (stream_id, (reader, writer)) = conn.accept_bi_stream().await?.unwrap();
 
